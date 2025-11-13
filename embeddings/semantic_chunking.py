@@ -33,7 +33,7 @@ console = Console()
 )
 def semantic_chunking(input_file: Path, chunk_size: int) -> None:
     """Split a source file into semantic chunks and render them with rich formatting."""
-    splitter = CodeSplitter(tree_sitter_python.language(), (chunk_size, 1000))
+    splitter = CodeSplitter(tree_sitter_python.language(), (chunk_size, 2000))
     code = input_file.read_text(encoding="utf-8")
     chunks = splitter.chunk_indices(code)
 
