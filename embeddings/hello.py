@@ -6,7 +6,9 @@
 # ///
 
 from rich.console import Console
+from time import sleep
 
 console = Console()
 
-console.print("Hello, world!")
+with console.status(":wave: Hello, world!") as status:
+    sleep(1)
