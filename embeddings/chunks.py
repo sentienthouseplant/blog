@@ -42,12 +42,15 @@ $chunk
 Please give a short succinct context to situate this chunk within the overall document for the purposes of improving search retrieval of the chunk. Answer only with the succinct context and nothing else. 
 """)
 
+
 class Settings(BaseSettings):
     openrouter_api_key: str
     pinecone_api_key: str
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
 
+
 settings = Settings()
+
 
 @contextlib.contextmanager
 def clone_repo(repo_owner: str, repo_name: str):
@@ -84,29 +87,43 @@ def generate_chunk_context(code: str, chunk: str) -> str:
     )
     return response.choices[0].message.content
 
-def create_index():
+
+def create_or_get_index():
     pc = Pinecone(api_key=settings.pinecone_api_key)
-    already_exists = pc.has_index('codebase')
+    already_exists = pc.has_index("codebase")
     if not already_exists:
         print("Creating index...")
         pc.create_index_for_model(
-            name='codebase',
+            name="codebase",
             cloud="aws",
             region="us-east-1",
-            embed={
-                "model":"llama-text-embed-v2",
-                "field_map":{"text": "chunk_text"}
-            }
+            embed={"model": "llama-text-embed-v2", "field_map": {"text": "chunk_text"}},
         )
-    return pc.Index('codebase')
+    return pc.Index("codebase")
 
-def embed_chunk(chunk_index: int, chunk_text: str, file_path: str, repo_owner: str, repo_name: str):
-    index = create_index()
-    index.upsert_records("default", [{"id": f"repo:{repo_owner}/{repo_name}:{file_path}:{chunk_index}", "chunk_text": chunk_text, "repo_owner": repo_owner, "repo_name": repo_name, "file_path": file_path}])
+
+def embed_chunk(
+    chunk_index: int, chunk_text: str, file_path: str, repo_owner: str, repo_name: str
+):
+    index = create_or_get_index()
+    index.upsert_records(
+        "default",
+        [
+            {
+                "id": f"repo:{repo_owner}/{repo_name}:{file_path}:{chunk_index}",
+                "chunk_text": chunk_text,
+                "repo_owner": repo_owner,
+                "repo_name": repo_name,
+                "file_path": file_path,
+            }
+        ],
+    )
+
 
 @click.group()
 def cli():
     pass
+
 
 @cli.command()
 @click.option("--repo-owner", required=True)
@@ -126,9 +143,12 @@ def chunk(repo_owner: str, repo_name: str, chunks: int):
     table = Table(title="Chunks", show_lines=True)
     table.add_column("File", style="cyan")
     table.add_column("Chunks", style="green")
-    for file_path, _, chunk, _ in itertools.islice(chunk_repository(repo_owner, repo_name), chunks):
+    for file_path, _, chunk, _ in itertools.islice(
+        chunk_repository(repo_owner, repo_name), chunks
+    ):
         table.add_row(file_path, chunk)
     console.print(table)
+
 
 @cli.command()
 @click.option("--repo-owner", required=True)
@@ -141,9 +161,13 @@ def enrich(repo_owner: str, repo_name: str, chunks: int):
     table.add_column("Chunk", style="green")
     table.add_column("Context", style="green")
     with console.status("Enriching chunks..."):
-        for file_path, code, chunk, _ in itertools.islice(chunk_repository(repo_owner, repo_name), chunks):
+        for file_path, code, chunk, _ in itertools.islice(
+            chunk_repository(repo_owner, repo_name), chunks
+        ):
             context = generate_chunk_context(code, chunk)
-            table.add_row(file_path, chunk[:100] + "..." if len(chunk) > 30 else chunk, context)
+            table.add_row(
+                file_path, chunk[:100] + "..." if len(chunk) > 30 else chunk, context
+            )
     console.print(table)
 
 
@@ -154,10 +178,13 @@ def enrich(repo_owner: str, repo_name: str, chunks: int):
 def embed(repo_owner: str, repo_name: str, chunks: int):
     console = Console()
     with console.status("Embedding chunks..."):
-        for file_path, code, chunk, chunk_index in itertools.islice(chunk_repository(repo_owner, repo_name), chunks):
+        for file_path, code, chunk, chunk_index in itertools.islice(
+            chunk_repository(repo_owner, repo_name), chunks
+        ):
             context = generate_chunk_context(code, chunk)
             enriched_chunk = f"{context}\n\n{chunk}"
             embed_chunk(chunk_index, enriched_chunk, file_path, repo_owner, repo_name)
+
 
 if __name__ == "__main__":
     cli()
