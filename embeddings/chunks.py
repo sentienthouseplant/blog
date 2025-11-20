@@ -9,6 +9,7 @@
 #     "pydantic",
 #     "pydantic-settings",
 #     "openai",
+#     "pinecone"
 # ]
 # ///
 
@@ -27,6 +28,7 @@ from semantic_text_splitter import CodeSplitter
 import tree_sitter_python
 from rich.table import Table
 from rich.console import Console
+from pinecone import Pinecone
 
 
 PROMPT = Template("""
@@ -42,6 +44,7 @@ Please give a short succinct context to situate this chunk within the overall do
 
 class Settings(BaseSettings):
     openrouter_api_key: str
+    pinecone_api_key: str
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
 
 settings = Settings()
@@ -66,12 +69,12 @@ def chunk_repository(
                     relative_path = os.path.relpath(file_path, repo.working_tree_dir)
                     with open(file_path, "r", encoding="utf-8") as f:
                         code = f.read()
-                        chunks = splitter.chunks(code)
-                        for chunk in chunks:
-                            yield relative_path, code, chunk
+                        chunks = splitter.chunk_indices(code)
+                        for chunk_index, chunk in chunks:
+                            yield relative_path, code, chunk, chunk_index
 
 
-def enrich_chunk(code: str, chunk: str) -> str:
+def generate_chunk_context(code: str, chunk: str) -> str:
     prompt = PROMPT.substitute(document=code, chunk=chunk)
     response = OpenAI(
         api_key=settings.openrouter_api_key, base_url=settings.openrouter_base_url
@@ -81,11 +84,29 @@ def enrich_chunk(code: str, chunk: str) -> str:
     )
     return response.choices[0].message.content
 
+def create_index():
+    pc = Pinecone(api_key=settings.pinecone_api_key)
+    already_exists = pc.has_index('codebase')
+    if not already_exists:
+        print("Creating index...")
+        pc.create_index_for_model(
+            name='codebase',
+            cloud="aws",
+            region="us-east-1",
+            embed={
+                "model":"llama-text-embed-v2",
+                "field_map":{"text": "chunk_text"}
+            }
+        )
+    return pc.Index('codebase')
+
+def embed_chunk(chunk_index: int, chunk_text: str, file_path: str, repo_owner: str, repo_name: str):
+    index = create_index()
+    index.upsert_records("default", [{"id": f"repo:{repo_owner}/{repo_name}:{file_path}:{chunk_index}", "chunk_text": chunk_text, "repo_owner": repo_owner, "repo_name": repo_name, "file_path": file_path}])
 
 @click.group()
 def cli():
     pass
-
 
 @cli.command()
 @click.option("--repo-owner", required=True)
@@ -105,7 +126,7 @@ def chunk(repo_owner: str, repo_name: str, chunks: int):
     table = Table(title="Chunks", show_lines=True)
     table.add_column("File", style="cyan")
     table.add_column("Chunks", style="green")
-    for file_path, _, chunk in itertools.islice(chunk_repository(repo_owner, repo_name), chunks):
+    for file_path, _, chunk, _ in itertools.islice(chunk_repository(repo_owner, repo_name), chunks):
         table.add_row(file_path, chunk)
     console.print(table)
 
@@ -120,10 +141,23 @@ def enrich(repo_owner: str, repo_name: str, chunks: int):
     table.add_column("Chunk", style="green")
     table.add_column("Context", style="green")
     with console.status("Enriching chunks..."):
-        for file_path, code, chunk in itertools.islice(chunk_repository(repo_owner, repo_name), chunks):
-            context = enrich_chunk(code, chunk)
+        for file_path, code, chunk, _ in itertools.islice(chunk_repository(repo_owner, repo_name), chunks):
+            context = generate_chunk_context(code, chunk)
             table.add_row(file_path, chunk[:100] + "..." if len(chunk) > 30 else chunk, context)
     console.print(table)
+
+
+@cli.command()
+@click.option("--repo-owner", required=True)
+@click.option("--repo-name", required=True)
+@click.option("--chunks", default=5, type=int)
+def embed(repo_owner: str, repo_name: str, chunks: int):
+    console = Console()
+    with console.status("Embedding chunks..."):
+        for file_path, code, chunk, chunk_index in itertools.islice(chunk_repository(repo_owner, repo_name), chunks):
+            context = generate_chunk_context(code, chunk)
+            enriched_chunk = f"{context}\n\n{chunk}"
+            embed_chunk(chunk_index, enriched_chunk, file_path, repo_owner, repo_name)
 
 if __name__ == "__main__":
     cli()
