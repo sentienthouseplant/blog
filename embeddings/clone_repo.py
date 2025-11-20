@@ -119,9 +119,10 @@ def enrich(repo_owner: str, repo_name: str, chunks: int):
     table.add_column("Path", style="cyan")
     table.add_column("Chunk", style="green")
     table.add_column("Context", style="green")
-    for file_path, code, chunk in itertools.islice(chunk_repository(repo_owner, repo_name), chunks):
-        context = enrich_chunk(code, chunk)
-        table.add_row(file_path, chunk[:100] + "..." if len(chunk) > 30 else chunk, context)
+    with console.status("Enriching chunks..."):
+        for file_path, code, chunk in itertools.islice(chunk_repository(repo_owner, repo_name), chunks):
+            context = enrich_chunk(code, chunk)
+            table.add_row(file_path, chunk[:100] + "..." if len(chunk) > 30 else chunk, context)
     console.print(table)
 
 if __name__ == "__main__":
