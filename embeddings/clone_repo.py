@@ -76,7 +76,7 @@ def enrich_chunk(code: str, chunk: str) -> str:
     response = OpenAI(
         api_key=settings.openrouter_api_key, base_url=settings.openrouter_base_url
     ).chat.completions.create(
-        model="google/gemini-2.5-flash-lite-preview-09-2025",
+        model="x-ai/grok-4.1-fast:free",
         messages=[{"role": "user", "content": prompt}],
     )
     return response.choices[0].message.content
