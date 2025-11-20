@@ -6,6 +6,9 @@
 #     "semantic-text-splitter",
 #     "tree-sitter-python",
 #     "rich",
+#     "pydantic",
+#     "pydantic-settings",
+#     "openai",
 # ]
 # ///
 
@@ -15,7 +18,9 @@ import tempfile
 import os
 from typing import Iterator, Tuple
 import itertools
-
+from pydantic_settings import BaseSettings
+from openai import OpenAI
+from string import Template
 import git
 import click
 from semantic_text_splitter import CodeSplitter
@@ -23,6 +28,23 @@ import tree_sitter_python
 from rich.table import Table
 from rich.console import Console
 
+
+PROMPT = Template("""
+<document> 
+$document
+</document> 
+Here is the chunk we want to situate within the whole document 
+<chunk> 
+$chunk
+</chunk> 
+Please give a short succinct context to situate this chunk within the overall document for the purposes of improving search retrieval of the chunk. Answer only with the succinct context and nothing else. 
+""")
+
+class Settings(BaseSettings):
+    openrouter_api_key: str
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+
+settings = Settings()
 
 @contextlib.contextmanager
 def clone_repo(repo_owner: str, repo_name: str):
@@ -46,7 +68,18 @@ def chunk_repository(
                         code = f.read()
                         chunks = splitter.chunks(code)
                         for chunk in chunks:
-                            yield relative_path, chunk
+                            yield relative_path, code, chunk
+
+
+def enrich_chunk(code: str, chunk: str) -> str:
+    prompt = PROMPT.substitute(document=code, chunk=chunk)
+    response = OpenAI(
+        api_key=settings.openrouter_api_key, base_url=settings.openrouter_base_url
+    ).chat.completions.create(
+        model="google/gemini-2.5-flash-lite-preview-09-2025",
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return response.choices[0].message.content
 
 
 @click.group()
@@ -72,10 +105,24 @@ def chunk(repo_owner: str, repo_name: str, chunks: int):
     table = Table(title="Chunks", show_lines=True)
     table.add_column("File", style="cyan")
     table.add_column("Chunks", style="green")
-    for file_path, chunk in itertools.islice(chunk_repository(repo_owner, repo_name), chunks):
+    for file_path, _, chunk in itertools.islice(chunk_repository(repo_owner, repo_name), chunks):
         table.add_row(file_path, chunk)
     console.print(table)
 
+@cli.command()
+@click.option("--repo-owner", required=True)
+@click.option("--repo-name", required=True)
+@click.option("--chunks", default=5, type=int)
+def enrich(repo_owner: str, repo_name: str, chunks: int):
+    console = Console()
+    table = Table(title="Enriched Chunks", show_lines=True)
+    table.add_column("Path", style="cyan")
+    table.add_column("Chunk", style="green")
+    table.add_column("Context", style="green")
+    for file_path, code, chunk in itertools.islice(chunk_repository(repo_owner, repo_name), chunks):
+        context = enrich_chunk(code, chunk)
+        table.add_row(file_path, chunk[:100] + "..." if len(chunk) > 30 else chunk, context)
+    console.print(table)
 
 if __name__ == "__main__":
     cli()
