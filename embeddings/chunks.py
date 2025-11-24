@@ -45,8 +45,8 @@ Please give a short succinct context to situate this chunk within the overall do
 
 
 class Settings(BaseSettings):
-    openrouter_api_key: str
-    pinecone_api_key: str
+    openrouter_api_key: str|None = None
+    pinecone_api_key: str|None = None
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
 
 
